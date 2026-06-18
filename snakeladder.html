@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snakes and Ladders</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .game-container {
+            display: flex;
+            gap: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            width: 300px;
+            justify-content: space-between;
+        }
+
+        .setup-panel, .action-panel {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            margin-bottom: 15px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
+        .dice-display {
+            font-size: 48px;
+            text-align: center;
+            margin: 15px 0;
+        }
+
+        .log-container {
+            flex-grow: 1;
+            background: #212529;
+            color: #00ff66;
+            padding: 10px;
+            border-radius: 6px;
+            font-family: monospace;
+            height: 180px;
+            overflow-y: auto;
+            font-size: 13px;
+        }
+
+        .status-text {
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        canvas {
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Snakes & Ladders</h1>
+
+    <div class="game-container">
+        <canvas id="board" width="600" height="600"></canvas>
+
+        <div class="controls">
+            <div>
+                <div class="setup-panel">
+                    <label for="gameMode"><strong>Game Mode:</strong></label>
+                    <select id="gameMode">
+                        <option value="hh">Human vs Human</option>
+                        <option value="hc">Human vs CPU</option>
+                    </select>
+                    <button id="resetBtn">Restart Game</button>
+                </div>
+
+                <div class="action-panel">
+                    <div id="status" class="status-text">Player 1's Turn</div>
+                    <div id="diceResult" class="dice-display">🎲</div>
+                    <button id="rollBtn">Roll Dice</button>
+                </div>
+            </div>
+
+            <div>
+                <strong style="display:block; margin-bottom:5px;">Game Log:</strong>
+                <div id="log" class="log-container"></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+// Game Config
+const BOARD_SIZE = 10;
+const SQ_SIZE = canvas.width / BOARD_SIZE;
+
+// Define Snakes (Head -> Tail)
+const snakes = {
+    99: 78,
+    87: 24,
+    64: 60,
+    62: 19,
+    54: 34,
+    17: 7
+};
+
+// Define Ladders (Base -> Top)
+const ladders = {
+    4: 14,
+    9: 31,
+    20: 38,
+    28: 84,
+    40: 59,
+    71: 91
+};
+
+// Player states
+let players = [
+    { id: 1, name: "Player 1", position: 0, color: "#9c27b0" }, // Purple
+    { id: 2, name: "Player 2", position: 0, color: "#ff9800" }  // Orange
+];
+
+let turn = 0; // 0 = Player 1, 1 = Player 2
+let isGameOver = false;
+let isCpuThinking = false;
+
+// Helpers to convert tile index (1-100) to Canvas pixels (X, Y)
+function getCoordinates(position) {
+    if (position === 0) return { x: -20, y: canvas.height - 20 }; // Off-board start
+    
+    let zeroBased = position - 1;
+    let row = Math.floor(zeroBased / BOARD_SIZE);
+    let col = zeroBased % BOARD_SIZE;
+
+    // Boustrophedon (Snake-like) grid movement logic
+    if (row % 2 !== 0) {
+        col = BOARD_SIZE - 1 - col;
+    }
+
+    let x = col * SQ_SIZE + SQ_SIZE / 2;
+    let y = canvas.height - (row * SQ_SIZE + SQ_SIZE / 2);
+    return { x, y };
+}
+
+// UI Drawing Routines
+function drawBoard() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Draw Grid Tiles
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            let tileNum;
+            if (r % 2 === 0) {
+                tileNum = r * BOARD_SIZE + c + 1;
+            } else {
+                tileNum = r * BOARD_SIZE + (BOARD_SIZE - 1 - c) + 1;
+            }
+
+            // Alternating checkerboard pattern
+            ctx.fillStyle = (r + c) % 2 === 0 ? '#ffffff' : '#e2e8f0';
+            ctx.fillRect(c * SQ_SIZE, canvas.height - (r + 1) * SQ_SIZE, SQ_SIZE, SQ_SIZE);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.strokeRect(c * SQ_SIZE, canvas.height - (r + 1) * SQ_SIZE, SQ_SIZE, SQ_SIZE);
+
+            // Draw Tile Numbers
+            ctx.fillStyle = '#64748b';
+            ctx.font = '12px Arial';
+            ctx.fillText(tileNum, c * SQ_SIZE + 5, canvas.height - (r * SQ_SIZE) - 5);
+        }
+    }
+
+    // 2. Draw Ladders (Green)
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(46, 204, 113, 0.8)';
+    for (let start in ladders) {
+        let from = getCoordinates(parseInt(start));
+        let to = getCoordinates(ladders[start]);
+        
+        // Draw main structural rails
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+    }
+
+    // 3. Draw Snakes (Red)
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)';
+    for (let start in snakes) {
+        let from = getCoordinates(parseInt(start));
+        let to = getCoordinates(snakes[start]);
+        
+        // Draw body path
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        // Slight Bezier curve setup to make snakes look curvy
+        let cpX = (from.x + to.x) / 2 + 30;
+        let cpY = (from.y + to.y) / 2 - 30;
+        ctx.quadraticCurveTo(cpX, cpY, to.x, to.y);
+        ctx.stroke();
+
+        // Draw a head indicator
+        ctx.fillStyle = '#c0392b';
+        ctx.beginPath();
+        ctx.arc(from.x, from.y, 6, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    // 4. Draw Player Tokens
+    players.forEach((p, idx) => {
+        if (p.position > 0) {
+            let coords = getCoordinates(p.position);
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            // Offset tokens slightly if they sit on the same tile
+            let offset = idx === 0 ? -8 : 8;
+            ctx.arc(coords.x + offset, coords.y, 12, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+    });
+}
+
+function logMessage(msg) {
+    const logBox = document.getElementById('log');
+    logBox.innerHTML += `<div>${msg}</div>`;
+    logBox.scrollTop = logBox.scrollHeight;
+}
+
+// Core Game Loop Execution
+function playTurn() {
+    if (isGameOver || isCpuThinking) return;
+
+    let activePlayer = players[turn];
+    let mode = document.getElementById('gameMode').value;
+
+    // Roll 1-6
+    let roll = Math.floor(Math.random() * 6) + 1;
+    
+    // Graphic Representation of standard dice characters
+    const diceFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+    document.getElementById('diceResult').innerText = diceFaces[roll - 1];
+
+    let oldPos = activePlayer.position;
+    let newPos = oldPos + roll;
+    let logTxt = `${activePlayer.name} rolled a ${roll}. `;
+
+    // Exact Landing Check
+    if (newPos > 100) {
+        logTxt += `Needs exact roll to win! Remains at ${oldPos}.`;
+        logMessage(logTxt);
+        switchTurn();
+        return;
+    }
+
+    activePlayer.position = newPos;
+    logTxt += `Moved to ${newPos}.`;
+
+    // Process Snakes & Ladders modifiers
+    if (ladders[newPos]) {
+        activePlayer.position = ladders[newPos];
+        logTxt += ` 🪜 Climbed a ladder to ${activePlayer.position}!`;
+    } else if (snakes[newPos]) {
+        activePlayer.position = snakes[newPos];
+        logTxt += ` 🐍 Slid down a snake to ${activePlayer.position}!`;
+    }
+
+    logMessage(logTxt);
+    drawBoard();
+
+    // Check Win State
+    if (activePlayer.position === 100) {
+        document.getElementById('status').innerText = `🏆 ${activePlayer.name} Wins!`;
+        logMessage(`<strong>🎉 GAME OVER! ${activePlayer.name} is the champion!</strong>`);
+        isGameOver = true;
+        document.getElementById('rollBtn').disabled = true;
+        return;
+    }
+
+    switchTurn();
+}
+
+function switchTurn() {
+    turn = turn === 0 ? 1 : 0;
+    let nextPlayer = players[turn];
+    let mode = document.getElementById('gameMode').value;
+
+    document.getElementById('status').innerText = `${nextPlayer.name}'s Turn`;
+
+    // Handle automated AI/CPU Turn sequence
+    if (mode === 'hc' && turn === 1 && !isGameOver) {
+        isCpuThinking = true;
+        document.getElementById('rollBtn').disabled = true;
+        document.getElementById('status').innerText = `CPU is calculating...`;
+        
+        setTimeout(() => {
+            isCpuThinking = false;
+            document.getElementById('rollBtn').disabled = false;
+            playTurn();
+        }, 1000); // 1-second delay so human can track CPU actions
+    }
+}
+
+function resetGame() {
+    players[0].position = 0;
+    players[1].position = 0;
+    turn = 0;
+    isGameOver = false;
+    isCpuThinking = false;
+    
+    let mode = document.getElementById('gameMode').value;
+    players[1].name = mode === 'hc' ? "CPU" : "Player 2";
+
+    document.getElementById('status').innerText = "Player 1's Turn";
+    document.getElementById('diceResult').innerText = "🎲";
+    document.getElementById('log').innerHTML = "<em>Game Started! Good Luck!</em>";
+    document.getElementById('rollBtn').disabled = false;
+    
+    drawBoard();
+}
+
+// Event Listeners
+document.getElementById('rollBtn').addEventListener('click', playTurn);
+document.getElementById('resetBtn').addEventListener('click', resetGame);
+document.getElementById('gameMode').addEventListener('change', resetGame);
+
+// Initial Execution on view load
+drawBoard();
+document.getElementById('log').innerHTML = "<em>Game Setup complete. Roll to start!</em>";
+</script>
+
+</body>
+</html>
